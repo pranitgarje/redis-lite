@@ -35,7 +35,7 @@ The server now employs a "Connection Loop" separate from the "Request Loop":
 3.  **Teardown:** The inner loop breaks only when the client disconnects or a protocol violation occurs.
 
 **Sequence Diagram:**
-![Sequence Diagram](assets/sequence_v02.png) 
+![Sequence Diagram](assets/Architecture_v0.2.drawio.png) 
 
 ### Key Technical Implementation
 * **Buffer Management:** Implemented `read_full()` and `write_all()` wrappers to handle partial kernel I/O, ensuring strict adherence to the protocol length.
