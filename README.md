@@ -15,16 +15,30 @@ Instead of using HTTP/REST frameworks (like Flask or Express), this project uses
 
 ---
 
-## 2. Architecture: v0.1 (Iterative Server)
-*Current Version: v0.1 - Basic Client-Server Handshake*
+## 2. Architecture: v0.2 (Persistent Connection)
+*Current Version: v0.2 - Protocol Framing & Event Loop*
 
-The current implementation establishes the foundational network layer using the **Iterative Server Model**.
+In v0.1, the server closed connections after a single request. v0.2 introduces a **Length-Prefixed Protocol** and a **Nested Loop Architecture** to handle persistent connections, allowing clients to send multiple commands in a single session.
 
-### Design Pattern
-At this stage, the server handles requests synchronously (blocking I/O).
-1.  **Socket Initialization:** The server requests a socket descriptor from the OS kernel.
-2.  **Binding:** The server binds to `0.0.0.0` (INADDR_ANY) to accept connections from any interface.
-3.  **Blocking Accept:** The main thread blocks at `accept()` until a client initiates a TCP handshake (SYN/ACK).
-4.  **Sequential Processing:** Once a connection is established, the server reads the request, processes it, sends a response, and strictly closes the socket.
-   
+### Protocol Design (Custom Application Layer)
+TCP is a byte stream, meaning message boundaries are not guaranteed. To distinguish between messages, I implemented a custom framing protocol:
+* **Header (4 bytes):** Little-endian integer specifying the length of the body.
+* **Body (N bytes):** The actual payload.
+
+**Packet Structure:**
+`[ Length (4B) ] [ Payload (N Bytes) ]`
+
+### System Design
+The server now employs a "Connection Loop" separate from the "Request Loop":
+1.  **Accept Phase:** The outer loop waits for a TCP handshake.
+2.  **Request Phase:** Once connected, an inner `while(true)` loop continuously reads the 4-byte header, determines the message size, and processes the command.
+3.  **Teardown:** The inner loop breaks only when the client disconnects or a protocol violation occurs.
+
+**Sequence Diagram:**
+![Sequence Diagram](assets/sequence_v02.png) 
+
+### Key Technical Implementation
+* **Buffer Management:** Implemented `read_full()` and `write_all()` wrappers to handle partial kernel I/O, ensuring strict adherence to the protocol length.
+* **Protocol Safety:** The server validates the length header against `k_max_msg` (4096 bytes) to prevent buffer overflow attacks.
+* **Pipeline Ready:** This architecture lays the groundwork for Pipelining (sending multiple requests without waiting for replies), a core Redis feature.
 
