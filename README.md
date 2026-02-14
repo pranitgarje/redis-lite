@@ -38,7 +38,7 @@ Unlike traditional blocking servers that spawn a thread per client, **redis-lite
 3.  **Parse & Execute:** The protocol parser constructs a command, executes it against the global map, and generates a response.
 4.  **Write:** The response is queued in `Conn.outgoing` and written when the socket is ready.
 
-![Sequence Diagram](Architecture_v1.png)
+![Sequence Diagram](assets/Architecture_v1.png)
 
 ### 2. Class Design
 The system is designed around the `Conn` struct, which acts as a state container for each client.
@@ -47,7 +47,7 @@ The system is designed around the `Conn` struct, which acts as a state container
 * **Conn:** Encapsulates the socket `fd`, protocol state (`want_read/write`), and raw byte buffers.
 * **GlobalStore:** A wrapper around `std::map<string, string>` providing O(log n) data access.
 
-![Server Class Diagram](server_class_diagram_v1.png)
+![Server Class Diagram](assets/server_class_diagram_v1.png)
 
 ---
 
