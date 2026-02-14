@@ -14,35 +14,53 @@ This project is built in C++ specifically to prioritize **control** and **perfor
 Instead of using HTTP/REST frameworks (like Flask or Express), this project uses raw TCP sockets. This is to minimize the packet overhead and handle the raw byte streams directly, mimicking how production-grade databases handle low-level communication.
 
 ---
-## 1. Architecture: v0.3 (Event-Driven & Non-Blocking)
-*Current Version: v0.3 - Event Loop with `poll()`*
+> **Current Version:** v1.0 (Reactor Pattern with `poll`)
+> **Status:** Stable Core
 
-In previous versions, the server blocked on `accept()` or `read()`, meaning it could only serve one client at a time (or one per thread). v0.3 introduces a **Single-Threaded Event Loop** architecture, similar to the real Redis or Node.js.
+## ⚡ Features
 
-### Core Concepts
-1.  **Non-Blocking I/O:** All sockets are set to `O_NONBLOCK` mode. If a read/write operation can't complete immediately, the kernel returns `EAGAIN` instead of putting the process to sleep.
-2.  **IO Multiplexing (`poll`):** Instead of checking sockets one by one, we use the `poll()` syscall to monitor all active connections simultaneously. The kernel wakes us up only when a socket is ready to be read from or written to.
-3.  **State Machine:** Each connection is managed via a `Conn` struct that tracks its state (`want_read`, `want_write`) and maintains separate input/output buffers.
+* **Core Commands:** Supports `GET`, `SET`, and `DEL`.
+* **Event-Driven:** Uses a single-threaded event loop to handle concurrent connections efficiently.
+* **Non-Blocking I/O:** Hand-rolled buffering system (`incoming`/`outgoing` queues) to handle partial reads/writes without blocking.
+* **Pipelining:** Capable of processing multiple requests in a single network packet.
+* **Protocol:** Custom TLV (Type-Length-Value) binary protocol.
 
-### System Design
-The server now employs a "Connection Loop" separate from the "Request Loop":
-1.  **Accept Phase:** The outer loop waits for a TCP handshake.
-2.  **Request Phase:** Once connected, an inner `while(true)` loop continuously reads the 4-byte header, determines the message size, and processes the command.
-3.  **Teardown:** The inner loop breaks only when the client disconnects or a protocol violation occurs.
+---
 
-**Sequence Diagram:**
-![Sequence Diagram](assets/Architecture_v0.2.drawio.png) 
+## 🏗️ Technical Architecture
 
-### Key Technical Implementation
-* **The `Conn` Struct:** ```cpp
-    struct Conn {
-        int fd;
-        bool want_read;  // State: Waiting for request?
-        bool want_write; // State: Response ready to send?
-        std::vector<uint8_t> incoming; // Read Buffer
-        std::vector<uint8_t> outgoing; // Write Buffer
-    };
-    ```
-* **Dynamic Buffering:** Unlike fixed `char` arrays, I implemented `std::vector<uint8_t>` buffers. This handles **TCP Streaming** issues (like partial reads) by appending data until a full frame (header + body) is available.
-* **Pipelining Support:** The `handle_read` loop processes *all* available requests in the input buffer before returning to `poll()`. This allows a client to send 3 commands in one packet and get 3 responses, significantly increasing throughput.
+### 1. The Reactor Pattern (Event Loop)
+Unlike traditional blocking servers that spawn a thread per client, **redis-lite** uses a single thread to manage all connections. It utilizes the `poll()` system call to monitor the state of multiple file descriptors simultaneously.
 
+**Request Lifecycle:**
+1.  **Poll:** The server waits for `POLLIN` (readable) or `POLLOUT` (writable) events.
+2.  **Read:** Data is read into a connection-specific buffer (`Conn.incoming`).
+3.  **Parse & Execute:** The protocol parser constructs a command, executes it against the global map, and generates a response.
+4.  **Write:** The response is queued in `Conn.outgoing` and written when the socket is ready.
+
+![Sequence Diagram](Architecture_v1.png)
+
+### 2. Class Design
+The system is designed around the `Conn` struct, which acts as a state container for each client.
+
+* **ServerLoop:** Manages the `poll_args` vector and the lifecycle of file descriptors.
+* **Conn:** Encapsulates the socket `fd`, protocol state (`want_read/write`), and raw byte buffers.
+* **GlobalStore:** A wrapper around `std::map<string, string>` providing O(log n) data access.
+
+![Server Class Diagram](server_class_diagram_v1.png)
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+* Linux/macOS (POSIX compliant)
+* g++ (C++11 or later)
+
+### Building
+```bash
+# Compile the server
+g++ -Wall -Wextra -O2 -g server.cpp -o server
+
+# Compile the client
+g++ -Wall -Wextra -O2 -g client.cpp -o client
