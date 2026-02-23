@@ -18,6 +18,12 @@
 #include <vector>
 #include <map>
 
+#include "hashtable.h"
+/*Remember how hashtable.cpp only gives us back an HNode*? We need to find the actual data (the string key/value) attached to it. This macro does pointer math. It takes the memory address of the HNode, subtracts its position inside the struct, and returns a pointer to the entire wrapper struct!*/
+#define container_of(ptr, T, member) \
+    ((T *)( (char *)ptr - offsetof(T, member) ))
+
+
 static void msg(const char *msg) {
     fprintf(stderr, "%s\n", msg);
 }
@@ -149,38 +155,105 @@ struct Response{
     uint32_t status=0;  //A simple integer code (0 = OK, 1 = Error, etc.).
     std::vector<uint8_t> data;  //The actual payload we want to send back to the client (like the value of a key).
 };
-// 2. The Actual Data Store (The "Database")
-static std::map<std::string, std::string> g_data;
+static struct {
+    HMap db;    // top-level hashtable
+} g_data;
+/*Instead of std::map, your global database is now just a wrapper around your HMap manager from hashtable.h*/
 /*std::map: It's a binary search tree (usually Red-Black Tree) under the hood. It maps a string (Key) to a string (Value).*/
 
-static void do_request(std::vector<std::string> &cmd,Response &out){
-    // COMMAND: GET
-    if(cmd.size()==2 && cmd[0]=="get"){  /*Validation: A get command must look like ["get", "key"]. If it has 3 parts or 1 part, it's invalid.*/
-           auto it=g_data.find(cmd[1]);  //This searches the map for the key (cmd[1]). It returns an iterator (pointer-like object) 
-           if(it==g_data.end()){
-            out.status=RES_NX; //NX = Non-Existent
-            return ;
-           }
-           const std::string &val = it->second;
-           out.data.assign(val.begin(),val.end());
-         
+/*This is your actual payload. Notice how HNode node; is embedded directly inside it.
+ This is the "handle glued to the back" concept we discussed earlier.
+  The hash table only cares about node, but you care about key and val.*/
+struct Entry {
+    struct HNode node;  // hashtable node
+    std::string key;
+    std::string val;
+};
+/*Your hash table needs to know if two keys are actually identical (in case of a hash collision).
+This function uses the container_of trick to grab the full Entry for both nodes, and then compares their C++ strings (le->key == re->key)*/
+static bool entry_eq(HNode *lhs, HNode *rhs) {
+    struct Entry *le = container_of(lhs, struct Entry, node);
+    struct Entry *re = container_of(rhs, struct Entry, node);
+    return le->key == re->key;
+}
+
+/*This is an implementation of the FNV-1a hash algorithm.
+ It loops through every character in your string and scrambles it into a 64-bit integer (hcode).
+  This number tells the hash table which bucket to put the entry in.*/
+static uint64_t str_hash(const uint8_t *data, size_t len) {
+    uint32_t h = 0x811C9DC5;
+    for (size_t i = 0; i < len; i++) {
+        h = (h + data[i]) * 0x01000193;
     }
-    // COMMAND: SET
-    /*Crucial detail: If the key cmd[1] doesn't exist, this operator creates it automatically with an empty value!*/
-    else if (cmd.size() == 3 && cmd[0] == "set") {
-        g_data[cmd[1]].swap(cmd[2]);
-     /*.swap(cmd[2]): This is a performance trick.Instead of copying the massive string from cmd[2] into the map, we just swap the internal pointers.cmd[2] (the string in our input vector) becomes empty/garbage, and the map gets the data. This is extremely fast (O(1)).*/
-    } 
-    // COMMAND: DEL
-    /*: Removes the key from the map. If the key didn't exist, it does nothing (safe).*/
-    else if (cmd.size() == 2 && cmd[0] == "del") {
-        g_data.erase(cmd[1]);
-    } 
-    // UNKNOWN
-    else {
-        out.status = RES_ERR; // Error
+    return h;
+}
+
+
+static void do_get(std::vector<std::string> &cmd, Response &out) {
+    // a dummy `Entry` just for the lookup
+    Entry key;              //We create a temporary, fake Entry just to hold the key we are looking for.
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());         //We calculate the hash of the target string so the lookup function can find it fast.
+    // hashtable lookup
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);                   //We ask your custom hash table to find the node. We pass in the dummy key and our entry_eq comparison function. If it returns NULL, the key doesn't exist (RES_NX).
+    if (!node) {
+        out.status = RES_NX;
+        return;
+    }
+    // copy the value
+    const std::string &val = container_of(node, Entry, node)->val;
+    assert(val.size() <= k_max_msg);
+    out.data.assign(val.begin(), val.end());
+}
+
+static void do_set(std::vector<std::string> &cmd, Response &) {
+    // a dummy `Entry` just for the lookup
+    Entry key;   //Similar to get, we create a dummy key and try to find it in the database first.
+    key.key.swap(cmd[1]);                                       //
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+    // hashtable lookup
+    HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+    if (node) {       //If found: We don't need to insert a new node. We just find the existing Entry and use .swap() to quickly replace the old value with the new one.
+        // found, update the value
+        container_of(node, Entry, node)->val.swap(cmd[2]);
+    } else {
+        // not found, allocate & insert a new pair
+        Entry *ent = new Entry();
+        ent->key.swap(key.key);
+        ent->node.hcode = key.node.hcode;
+        ent->val.swap(cmd[2]);
+        hm_insert(&g_data.db, &ent->node);
+    }
+    /*If not found: We allocate fresh memory (new Entry()). 
+    We fill it with the key, the pre-calculated hash code,
+     and the value. Finally, we hand its &ent->node over to hm_insert to link it into the hash table.*/
+}
+
+static void do_del(std::vector<std::string> &cmd, Response &) {
+    // a dummy `Entry` just for the lookup
+    Entry key;
+    key.key.swap(cmd[1]);
+    key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+    // hashtable delete
+    HNode *node = hm_delete(&g_data.db, &key.node, &entry_eq);         //: This removes the node from the hash table's linked list and returns the detached node to us.
+    if (node) { // deallocate the pair
+        delete container_of(node, Entry, node);        //Because the hash table only manages links (not memory), it is our job to free the memory. We find the parent Entry and delete it so we don't cause a memory leak.
     }
 }
+
+
+static void do_request(std::vector<std::string> &cmd, Response &out) {
+    if (cmd.size() == 2 && cmd[0] == "get") {
+        return do_get(cmd, out);
+    } else if (cmd.size() == 3 && cmd[0] == "set") {
+        return do_set(cmd, out);
+    } else if (cmd.size() == 2 && cmd[0] == "del") {
+        return do_del(cmd, out);
+    } else {
+        out.status = RES_ERR;       // unrecognized command
+    }
+}
+
 /*Structure: The response protocol is simple: [Total Length] [Status Code] [Data Payload].
 resp_len: It calculates 4 (for the status code) + size of data.
 buf_append: This is just a helper (likely using std::vector::insert) to push raw bytes onto the output buffer*/
