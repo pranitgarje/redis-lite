@@ -55,3 +55,13 @@
     * **Memory Optimization:** Leveraged C-style Flexible Array Members (`char name[0]`) within `ZNode` to allocate the struct and its variable-length string in a single contiguous memory block, drastically reducing heap fragmentation and allocation overhead.
     * **Zero-Allocation Lookups:** Introduced a stack-allocated `LookupKey` with a pre-calculated hash code to search the global dictionary, preventing unnecessary heap allocations during `GET`, `SET`, and `DEL` operations.
 * **Outcome:** A type-safe, multi-structure database engine capable of handling complex composite data types with enterprise-grade algorithmic efficiency.
+
+## v2.0: Event-Driven Timers & Cache Expiration (Current)
+* **Goal:** Implement robust connection lifecycle management and automatic TTL-based cache eviction without blocking the event loop.
+* **Architecture Shift:**
+    * **Dynamic Event Loop Timeouts:** Modified the `poll()` syscall to use a dynamically calculated `timeout_ms` instead of sleeping indefinitely (`-1`). The server now calculates the exact delta to the nearest timer, allowing it to wake up autonomously for cleanup sweeps.
+    * **O(1) Idle Connection Queue:** Implemented a custom intrusive Doubly Linked List (`DList`) to track connection age. Because all connections have a fixed 5-second timeout, the list naturally acts as a strictly ordered FIFO queue. This allows $O(1)$ identification of expired connections at the head, entirely avoiding $O(N)$ linear scans.
+    * **Min-Heap for TTLs:** Engineered an array-encoded Min-Heap to track arbitrary Time-to-Live (TTL) values for database keys. Because TTLs are random, the binary heap structure guarantees $O(1)$ access to the nearest expiring key (the root) and $O(\log N)$ updates, ensuring thousands of simultaneous expirations don't degrade throughput.
+    * **Cross-Referenced Intrusive Data:** Embedded a `heap_idx` within the database `Entry` payload, while giving the `HeapItem` a back-reference pointer to that index. When the heap re-sorts itself (`heap_up`/`heap_down`), it uses this pointer to silently update the database on its new array location. This allows $O(\log N)$ synchronization when a user manually deletes a key before its timer naturally expires.
+    * **Amortized Cleanup:** Implemented a work limit (`k_max_works`) inside the TTL cleanup routine to prevent latency spikes. If thousands of keys expire on the exact same millisecond, the server evicts them in smaller batches across multiple event loop iterations.
+* **Outcome:** The database now autonomously manages resource limits and cache freshness with minimal CPU overhead, evolving into a production-ready TTL caching layer.
