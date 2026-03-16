@@ -3,7 +3,7 @@ CXX = g++
 CXXFLAGS = -Wall -Wextra -O2 -g
 
 # Define the output executables and the new library
-TARGETS = server client test_heap
+TARGETS = server client test_heap benchmark
 LIBRARY = libavl.a
 
 # Default target: builds both server, client, and the test
@@ -34,6 +34,9 @@ client: client.cpp $(LIBRARY)
 # ---------------------------------------------------------
 test_heap: test_heap.cpp heap.h
 	$(CXX) $(CXXFLAGS) test_heap.cpp -o test_heap
+
+benchmark: benchmark.cpp
+	$(CXX) $(CXXFLAGS) benchmark.cpp -o benchmark
 
 # Cleanup rule to remove binaries, object files, and libraries
 clean:
