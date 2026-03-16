@@ -32,17 +32,19 @@ Instead of using HTTP/REST frameworks or standard library containers (`std::map`
 
 ## 📊 Performance Benchmarks
 
-To measure raw throughput, a custom C++ benchmarking tool was built to test the server's command pipelining capabilities over a TCP loopback interface. 
+To measure raw throughput, a custom C++ benchmarking tool was built to test the server's command pipelining capabilities over a TCP loopback interface (`127.0.0.1`). 
 
-The server successfully processes high-volume, pipelined `SET` commands with practically zero overhead, natively competing with standard out-of-the-box instances of the actual Redis database.
+The server successfully processes high-volume, pipelined commands with practically zero overhead, natively competing with standard out-of-the-box instances of the actual Redis database.
 
-* **Test:** 100,000 Pipelined `SET` Commands
-* **Payload:** Custom TLV Binary Protocol
-* **Throughput:** **142,306 Requests Per Second (RPS)**
-* **Execution Time:** ~0.70 seconds
+**Test Setup:** 100,000 Pipelined Commands | Custom TLV Binary Protocol
 
-*(Note: These benchmarks reflect single-threaded event loop performance on consumer hardware, demonstrating the efficiency of the custom $O(1)$ dictionary and non-blocking I/O multiplexing).*
+| Command | Internal Operation | Throughput (RPS) | Execution Time |
+| :--- | :--- | :--- | :--- |
+| **`SET`** | $O(1)$ Hash Table Write | **172,716 RPS** | ~0.57 seconds |
+| **`GET`** | $O(1)$ Hash Table Read | **137,859 RPS** | ~0.72 seconds |
+| **`ZADD`** | $O(\log N)$ AVL Tree + Hash Insert | **111,037 RPS** | ~0.90 seconds |
 
+*(Note: These benchmarks reflect single-threaded event loop performance on consumer hardware. They demonstrate the extreme efficiency of the custom $O(1)$ dictionary, zero-allocation memory management, and non-blocking I/O multiplexing).*
 ---
 
 ## 🏗️ Technical Architecture
