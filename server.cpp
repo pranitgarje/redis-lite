@@ -290,6 +290,11 @@ static Entry *entry_new(uint32_t type) {
     return ent;
 }
 static void entry_del(Entry *ent) {
+   // Remove from TTL heap if it has a timer
+    if (ent->heap_idx != (size_t)-1) {
+        heap_delete(g_data.heap, ent->heap_idx);
+        ent->heap_idx = -1;
+    }
     if (ent->type == T_ZSET) {
         zset_clear(&ent->zset);
     }
@@ -413,6 +418,7 @@ static void do_set(std::vector<std::string> &cmd, Buffer &out) {
         ent->key.swap(key.key);
         ent->node.hcode = key.node.hcode;
         ent->str.swap(cmd[2]);
+        ent->heap_idx = -1;
         hm_insert(&g_data.db, &ent->node);
     }
     return out_nil(out);
@@ -861,7 +867,19 @@ static void process_timers() {
 
     // 1. Clean up expired idle connections (unchanged)
     while (!dlist_empty(&g_data.idle_list)) {
-        // ... your existing dlist code ...
+       // Look at the oldest connection at the front of the line
+        Conn *conn = container_of(g_data.idle_list.next, Conn, idle_node);
+        uint64_t next_timeout = conn->last_active_ms + k_idle_timeout_ms;
+
+        if (next_timeout > now_ms) {
+            // Not expired yet! Since the list is ordered by age, 
+            // if this one hasn't expired, nobody else behind it has either.
+            break;
+        }
+
+        // Connection is too old, kick them out to free up resources
+        msg("idle connection expired");
+        conn_destroy(conn);
     }
 
     // 2. Clean up expired database keys from the Heap (NEW)
@@ -874,7 +892,13 @@ static void process_timers() {
         
         // Remove it from the database hashtable
         HNode *node = hm_delete(&g_data.db, &ent->node, &hnode_same);
-        assert(node == &ent->node);
+        if (!node) {
+            // SAFE FALLBACK: The key was somehow already missing. 
+            // Just delete the memory to clean up the ghost timer and move on.
+            ent->heap_idx = -1;
+            entry_del(ent);
+            continue;
+        }
         
         // Actually delete the memory (this also safely removes it from the heap!)
         entry_del(ent); 
